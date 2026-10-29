@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PresensiQR - Absensi QR & Geofencing</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Leaflet CSS & JS untuk Peta Radius -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- HTML5 QR Code Scanner Library -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  
+  <!-- QRCode.js Generator Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* Styling Peta dan Elemen Khusus */
+    #map { height: 260px; z-index: 10; border-radius: 0.75rem; }
+    #reader { width: 100%; border: none !important; border-radius: 0.75rem; overflow: hidden; }
+    #reader video { border-radius: 0.75rem; object-fit: cover; }
+    /* Animasi radar pulsasi scanner */
+    @keyframes scan-radar {
+      0% { top: 0%; opacity: 0.8; }
+      50% { opacity: 0.3; }
+      100% { top: 96%; opacity: 0.8; }
+    }
+    .scanner-line {
+      animation: scan-radar 2.2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header Navbar -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+          <i data-lucide="scan-line" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-slate-900 leading-none">PresensiQR</h1>
+          <p class="text-xs text-slate-500 font-medium">Validasi Lokasi & Geofence GPS</p>
+        </div>
+      </div>
+      
+      <!-- Nav Tabs -->
+      <div class="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+        <button id="tabEmployee" onclick="switchMode('employee')" class="px-4 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 bg-white text-blue-600 shadow-sm">
+          <i data-lucide="user-check" class="w-4 h-4"></i>
+          <span>Mode Karyawan</span>
+        </button>
+        <button id="tabAdmin" onclick="switchMode('admin')" class="px-4 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900">
+          <i data-lucide="settings" class="w-4 h-4"></i>
+          <span>Admin & Peta</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Container Utama -->
+  <main class="max-w-6xl mx-auto p-4 sm:p-6 flex-1 w-full">
+
+    <!-- ========================================== -->
+    <!-- VIEW 1: MODE KARYAWAN (SCANNER ABSENSI)    -->
+    <!-- ========================================== -->
+    <div id="viewEmployee" class="space-y-6">
+      
+      <!-- Status Bar Lokasi Pengguna -->
+      <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div class="flex items-center space-x-3">
+          <div id="gpsStatusIcon" class="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+            <i data-lucide="map-pin" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider font-semibold text-slate-400">Deteksi Koordinat Anda</div>
+            <div id="userLocationText" class="text-sm font-medium text-slate-700">Mencari sinyal GPS...</div>
+            <div id="userDistanceBadge" class="text-xs text-slate-500 mt-0.5">Memeriksa toleransi radius...</div>
+          </div>
+        </div>
+        <button onclick="refreshUserLocation()" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors flex items-center gap-1.5 self-stretch sm:self-auto justify-center">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span>Refresh GPS</span>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Panel Form & Kamera Scanner -->
+        <div class="lg:col-span-7 space-y-5">
+          <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+            
+            <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+              <i data-lucide="camera" class="w-4 h-4 text-blue-600"></i>
+              <span>Pindai QR Code Presensi</span>
+            </h2>
+
+            <!-- Form Identitas Karyawan -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Nama / ID Pegawai</label>
+                <input type="text" id="empName" placeholder="Contoh: Budi Santoso" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Tipe Absen</label>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="flex items-center justify-center p-2.5 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-50 transition has-[:checked]:bg-blue-50 has-[:checked]:border-blue-600 has-[:checked]:text-blue-700 text-xs font-bold">
+                    <input type="radio" name="attendanceType" value="MASUK" checked class="hidden">
+                    <span>Masuk</span>
+                  </label>
+                  <label class="flex items-center justify-center p-2.5 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-50 transition has-[:checked]:bg-indigo-50 has-[:checked]:border-indigo-600 has-[:checked]:text-indigo-700 text-xs font-bold">
+                    <input type="radio" name="attendanceType" value="PULANG" class="hidden">
+                    <span>Pulang</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Kamera Scanner Container -->
+            <div class="relative bg-slate-900 rounded-2xl overflow-hidden min-h-[280px] flex items-center justify-center border border-slate-800 shadow-inner">
+              <div id="reader" class="w-full"></div>
+              
+              <!-- Scanning Animation overlay -->
+              <div id="scanOverlay" class="absolute inset-0 pointer-events-none hidden flex-col items-center justify-center p-6">
+                <div class="w-48 h-48 border-2 border-blue-400/80 rounded-2xl relative shadow-lg">
+                  <div class="absolute w-full h-1 bg-gradient-to-r from-transparent via-blue-400 to-transparent scanner-line shadow-sm shadow-blue-400"></div>
+                </div>
+                <span class="text-xs font-semibold text-white/80 bg-black/40 px-3 py-1 rounded-full mt-4 backdrop-blur-sm">Arahkan QR ke kotak tengah</span>
+              </div>
+
+              <!-- Start Button jika kamera belum aktif -->
+              <div id="cameraPrompt" class="text-center p-6 space-y-3">
+                <div class="w-14 h-14 bg-white/10 text-white rounded-full mx-auto flex items-center justify-center">
+                  <i data-lucide="video" class="w-7 h-7"></i>
+                </div>
+                <div>
+                  <p class="text-white text-sm font-semibold">Kamera Belum Aktif</p>
+                  <p class="text-slate-400 text-xs mt-0.5">Izinkan akses kamera dan GPS browser untuk memindai</p>
+                </div>
+                <button onclick="startScanner()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition shadow-lg shadow-blue-600/30 flex items-center gap-2 mx-auto">
+                  <i data-lucide="play" class="w-4 h-4"></i>
+                  <span>Aktifkan Kamera</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Kontrol Tombol Kamera -->
+            <div id="cameraControls" class="hidden flex justify-between items-center pt-1">
+              <span class="text-xs text-slate-500 flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-ping"></span>
+                Kamera aktif memindai...
+              </span>
+              <button onclick="stopScanner()" class="px-3 py-1.5 text-xs text-red-600 font-semibold bg-red-50 hover:bg-red-100 rounded-lg transition-colors">
+                Hentikan Kamera
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Panel Hasil Validasi Langsung & Informasi Target -->
+        <div class="lg:col-span-5 space-y-5">
+          <!-- Kotak Hasil Validasi Terakhir -->
+          <div id="resultCard" class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm min-h-[190px] flex flex-col justify-center text-center">
+            <div class="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400 mb-2">
+              <i data-lucide="clipboard-check" class="w-6 h-6"></i>
+            </div>
+            <h3 class="text-sm font-bold text-slate-700">Menunggu Pemindaian QR</h3>
+            <p class="text-xs text-slate-500 mt-1">Hasil validasi posisi absensi akan ditampilkan secara langsung di sini.</p>
+          </div>
+
+          <!-- Petunjuk Langkah Penggunaan -->
+          <div class="bg-blue-50/70 border border-blue-100 rounded-2xl p-5">
+            <h4 class="text-xs font-bold text-blue-900 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <i data-lucide="info" class="w-4 h-4 text-blue-600"></i>
+              Ketentuan Presensi
+            </h4>
+            <ol class="text-xs text-blue-800 space-y-2 list-decimal list-inside leading-relaxed">
+              <li>Aktifkan <strong>GPS / Layanan Lokasi</strong> pada HP atau browser Anda.</li>
+              <li>Pastikan berada dalam batas radius lokasi kantor (<span id="targetRadiusNote" class="font-bold">50 m</span>).</li>
+              <li>Ketikkan <strong>Nama / NIK</strong> Anda sebelum memindai.</li>
+              <li>Arahkan kamera ke QR Code resmi yang disediakan Admin kantor.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- VIEW 2: MODE ADMIN (SETUP, PETA & QR GEN) -->
+    <!-- ========================================== -->
+    <div id="viewAdmin" class="hidden space-y-6">
+      
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Konfigurasi Titik Lokasi Kantor & Peta -->
+        <div class="lg:col-span-7 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+              <i data-lucide="map-pinned" class="w-5 h-5 text-blue-600"></i>
+              <span>Titik Lokasi Kantor (Geofence)</span>
+            </h2>
+            <button onclick="setTargetToCurrentLocation()" class="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition">
+              <i data-lucide="crosshair" class="w-3.5 h-3.5"></i>
+              <span>Gunakan Lokasi Saya</span>
+            </button>
+          </div>
+
+          <!-- Peta Leaflet -->
+          <div id="map" class="shadow-inner border border-slate-200"></div>
+
+          <!-- Form Titik Target -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Latitude</label>
+              <input type="number" step="any" id="targetLat" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Longitude</label>
+              <input type="number" step="any" id="targetLng" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Radius Toleransi (Meter)</label>
+              <input type="number" id="targetRadius" value="50" min="5" max="5000" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+          </div>
+
+          <button onclick="saveLocationSettings()" class="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl transition shadow flex items-center justify-center gap-1.5">
+            <i data-lucide="save" class="w-4 h-4"></i>
+            <span>Simpan Koordinat & Perbarui Radius</span>
+          </button>
+        </div>
+
+        <!-- Generator QR Code Kantor -->
+        <div class="lg:col-span-5 bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                <i data-lucide="qr-code" class="w-5 h-5 text-blue-600"></i>
+                <span>QR Code Absensi</span>
+              </h2>
+              <button onclick="generateRandomToken()" class="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg">
+                Acak Token
+              </button>
+            </div>
+            
+            <p class="text-xs text-slate-500 mb-4">Cetak atau tampilkan QR code ini di meja resepsionis atau gerbang absensi kantor.</p>
+
+            <!-- Container Output QR Code -->
+            <div class="bg-slate-50 p-6 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
+              <div id="qrcode" class="p-3 bg-white rounded-xl shadow-sm border border-slate-100 flex items-center justify-center min-h-[170px] min-w-[170px]"></div>
+              <div class="mt-3 text-center">
+                <span class="text-[11px] font-mono font-bold bg-white px-3 py-1 rounded-full border border-slate-200 text-slate-700" id="currentQrTokenLabel">TOKEN</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-2 pt-2">
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Token QR Rahasia</label>
+              <input type="text" id="qrTokenInput" value="PRESENSI-KANTOR-PUSAT-2026" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+            <button onclick="updateQrCode()" class="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl transition shadow flex items-center justify-center gap-1.5">
+              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+              <span>Buat QR Baru</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Tabel Riwayat Presensi Masuk / Pulang -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div>
+            <h2 class="text-base font-bold text-slate-800 flex items-center gap-2">
+              <i data-lucide="table-2" class="w-5 h-5 text-blue-600"></i>
+              <span>Riwayat Presensi Pengguna</span>
+            </h2>
+            <p class="text-xs text-slate-500 mt-0.5">Daftar log absensi tersimpan secara lokal di browser</p>
+          </div>
+          <div class="flex items-center gap-2 self-stretch sm:self-auto">
+            <button onclick="exportToCSV()" class="flex-1 sm:flex-initial px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow-sm">
+              <i data-lucide="download" class="w-3.5 h-3.5"></i>
+              <span>Unduh CSV</span>
+            </button>
+            <button onclick="clearHistoryData()" class="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              <span>Hapus Semua</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tabel Responsif -->
+        <div class="overflow-x-auto rounded-xl border border-slate-200">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase font-semibold text-[10px] tracking-wider">
+                <th class="py-3 px-4">Waktu</th>
+                <th class="py-3 px-4">Nama Pegawai</th>
+                <th class="py-3 px-4">Tipe</th>
+                <th class="py-3 px-4">Jarak</th>
+                <th class="py-3 px-4">Koordinat GPS</th>
+                <th class="py-3 px-4 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody id="attendanceTableBody" class="divide-y divide-slate-100">
+              <!-- Riwayat di-render via JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Modal Notifikasi Alert Kustom -->
+  <div id="customModal" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-100 text-center space-y-3">
+      <div id="modalIconContainer" class="w-12 h-12 rounded-full mx-auto flex items-center justify-center"></div>
+      <h3 id="modalTitle" class="text-base font-bold text-slate-800">Pemberitahuan</h3>
+      <p id="modalMessage" class="text-xs text-slate-600 leading-relaxed"></p>
+      <button onclick="closeModal()" class="w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-semibold hover:bg-slate-800 transition">
+        Tutup
+      </button>
+    </div>
+  </div>
+
+  <footer class="py-4 border-t border-slate-200 bg-white text-center text-xs text-slate-400">
+    PresensiQR &bull; Dilengkapi Geofencing Haversine & Validasi Lokasi Akurat
+  </footer>
+
+  <script>
+    /* ========================================================
+       STATE APLIKASI & KONFIGURASI DEFAULT
+       ======================================================== */
+    const STORAGE_KEY_CONFIG = 'presensi_target_config';
+    const STORAGE_KEY_LOGS = 'presensi_attendance_logs';
+
+    // Konfigurasi Target Default (Kantor Pusat / Titik Awal)
+    let config = {
+      lat: -6.2088,       // Default Jakarta
+      lng: 106.8456,
+      radius: 50,         // Meter
+      validToken: 'PRESENSI-KANTOR-PUSAT-2026'
+    };
+
+    let userPos = null;          // Koordinat pengguna saat ini
+    let html5QrCode = null;      // Instance scanner kamera
+    let map = null;              // Leaflet Map
+    let officeMarker = null;     // Marker titik kantor
+    let officeCircle = null;     // Lingkaran radius geofence
+    let isScanning = false;
+    let qrGeneratorInstance = null;
+
+    /* Inisialisasi Audio FX menggunakan Web Audio API tanpa file eksternal */
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(isSuccess) {
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      if (isSuccess) {
+        // Nada 'Ting' Sukses
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.1); // A5
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.4);
+      } else {
+        // Nada Rendah Gagal
+        osc.frequency.setValueAtTime(220, audioCtx.currentTime); // A3
+        osc.frequency.setValueAtTime(164.81, audioCtx.currentTime + 0.15); // E3
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.5);
+      }
+    }
+
+    /* ========================================================
+       PERHITUNGAN HAVERSINE FORMULA (JARAK GPS METER)
+       ======================================================== */
+    function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371000; // Radius Bumi dalam meter
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c; // Hasil dalam meter
+    }
+
+    /* ========================================================
+       MANAJEMEN GEOLOCATION BROWSER
+       ======================================================== */
+    function refreshUserLocation(callback) {
+      const statusIcon = document.getElementById('gpsStatusIcon');
+      const textElem = document.getElementById('userLocationText');
+      const badgeElem = document.getElementById('userDistanceBadge');
+
+      textElem.textContent = 'Mendeteksi posisi GPS presisi...';
+
+      if (!navigator.geolocation) {
+        textElem.textContent = 'Geolocation tidak didukung browser ini.';
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          userPos = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: Math.round(pos.coords.accuracy)
+          };
+
+          textElem.innerHTML = `<span class="font-mono">${userPos.lat.toFixed(5)}, ${userPos.lng.toFixed(5)}</span> <span class="text-xs text-slate-400">(Akurasi: ±${userPos.accuracy}m)</span>`;
+
+          // Hitung jarak saat ini ke titik kantor
+          const dist = calculateHaversineDistance(userPos.lat, userPos.lng, config.lat, config.lng);
+          const isInside = dist <= config.radius;
+
+          if (isInside) {
+            statusIcon.className = 'w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0';
+            badgeElem.innerHTML = `<span class="text-emerald-700 font-semibold flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Anda dalam radius absensi (${Math.round(dist)} m dari titik pusat)</span>`;
+          } else {
+            statusIcon.className = 'w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0';
+            badgeElem.innerHTML = `<span class="text-rose-600 font-semibold flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span> Luar radius: ${Math.round(dist)} m (Maks: ${config.radius} m)</span>`;
+          }
+
+          if (callback) callback(userPos);
+        },
+        (err) => {
+          console.error(err);
+          textElem.textContent = 'Gagal mengakses GPS: ' + err.message;
+          badgeElem.textContent = 'Pastikan GPS perangkat Anda aktif dan izin lokasi diizinkan.';
+          statusIcon.className = 'w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0';
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+      );
+    }
+
+    /* ========================================================
+       KAMERA & PEMINDAI QR (html5-qrcode)
+       ======================================================== */
+    async function startScanner() {
+      const nameInput = document.getElementById('empName');
+      if (!nameInput.value.trim()) {
+        showModal('Nama Diperlukan', 'Silakan ketikkan Nama atau ID Pegawai Anda sebelum mengaktifkan kamera scanner.');
+        nameInput.focus();
+        return;
+      }
+
+      // Pastikan lokasi terdeteksi
+      if (!userPos) {
+        refreshUserLocation();
+      }
+
+      try {
+        document.getElementById('cameraPrompt').classList.add('hidden');
+        document.getElementById('scanOverlay').classList.remove('hidden');
+        document.getElementById('scanOverlay').classList.add('flex');
+        document.getElementById('cameraControls').classList.remove('hidden');
+
+        html5QrCode = new Html5Qrcode("reader");
+        const configScan = { fps: 10, qrbox: { width: 220, height: 220 } };
+
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          configScan,
+          onScanSuccess
+        );
+        isScanning = true;
+      } catch (err) {
+        console.error(err);
+        showModal('Gagal Membuka Kamera', 'Kamera tidak dapat diakses atau diblokir oleh izin peramban.');
+        stopScanner();
+      }
+    }
+
+    async function stopScanner() {
+      if (html5QrCode && isScanning) {
+        try {
+          await html5QrCode.stop();
+          html5QrCode.clear();
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+      isScanning = false;
+      document.getElementById('cameraPrompt').classList.remove('hidden');
+      document.getElementById('scanOverlay').classList.add('hidden');
+      document.getElementById('scanOverlay').classList.remove('flex');
+      document.getElementById('cameraControls').classList.add('hidden');
+    }
+
+    /* Callback saat QR terdeteksi */
+    function onScanSuccess(decodedText) {
+      // Hentikan sementara pemindaian agar tidak terulang ganda
+      stopScanner();
+      processAttendance(decodedText.trim());
+    }
+
+    /* Proses Logika Absensi & Geofencing */
+    function processAttendance(scannedToken) {
+      const empName = document.getElementById('empName').value.trim() || 'Karyawan';
+      const attType = document.querySelector('input[name="attendanceType"]:checked').value;
+      const now = new Date();
+      const timeString = now.toLocaleDateString('id-ID', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+
+      // 1. Verifikasi Posisi GPS Tersedia
+      if (!userPos) {
+        playBeep(false);
+        renderResultCard(false, 'Koordinat GPS Tidak Ditemukan', 'Harap aktifkan GPS Anda lalu klik refresh lokasi.');
+        return;
+      }
+
+      // 2. Hitung Jarak Aktual (Haversine)
+      const distance = calculateHaversineDistance(userPos.lat, userPos.lng, config.lat, config.lng);
+      const isInsideGeofence = distance <= config.radius;
+      const isTokenValid = (scannedToken === config.validToken);
+
+      let isSuccess = false;
+      let statusTitle = '';
+      let statusMessage = '';
+
+      if (!isTokenValid) {
+        isSuccess = false;
+        statusTitle = 'QR Code Tidak Valid!';
+        statusMessage = `Kode QR yang Anda scan tidak cocok dengan token kantor saat ini.`;
+      } else if (!isInsideGeofence) {
+        isSuccess = false;
+        statusTitle = 'Gagal: Di Luar Batas Radius!';
+        statusMessage = `Jarak Anda ${Math.round(distance)} meter dari titik presensi. Batas maksimal toleransi adalah ${config.radius} meter.`;
+      } else {
+        isSuccess = true;
+        statusTitle = `Absen ${attType} Berhasil!`;
+        statusMessage = `Terverifikasi dalam radius (${Math.round(distance)} m dari lokasi pusat).`;
+      }
+
+      // Mainkan suara feedback
+      playBeep(isSuccess);
+
+      // Tampilkan hasil di Card UI
+      renderResultCard(isSuccess, statusTitle, statusMessage, {
+        name: empName,
+        type: attType,
+        distance: Math.round(distance),
+        time: timeString
+      });
+
+      // Simpan Catatan ke Log History
+      saveAttendanceLog({
+        id: Date.now(),
+        name: empName,
+        type: attType,
+        time: timeString,
+        distance: Math.round(distance),
+        status: isSuccess ? 'VALID' : 'REJECTED',
+        reason: !isTokenValid ? 'Token Salah' : (!isInsideGeofence ? 'Luar Radius' : 'Sukses'),
+        coords: `${userPos.lat.toFixed(5)}, ${userPos.lng.toFixed(5)}`
+      });
+    }
+
+    function renderResultCard(success, title, msg, details = null) {
+      const container = document.getElementById('resultCard');
+      if (success) {
+        container.className = 'bg-emerald-50/80 rounded-2xl p-5 border border-emerald-200 shadow-sm text-center transition-all';
+        container.innerHTML = `
+          <div class="w-14 h-14 bg-emerald-500 text-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg shadow-emerald-500/30">
+            <i data-lucide="check" class="w-8 h-8"></i>
+          </div>
+          <h3 class="text-base font-bold text-emerald-900">${title}</h3>
+          <p class="text-xs text-emerald-700 mt-1">${msg}</p>
+          ${details ? `
+            <div class="mt-4 pt-3 border-t border-emerald-200/60 grid grid-cols-2 gap-2 text-left text-xs text-emerald-800">
+              <div><span class="text-slate-500">Nama:</span> <strong class="text-emerald-950">${details.name}</strong></div>
+              <div><span class="text-slate-500">Tipe:</span> <strong class="text-emerald-950">${details.type}</strong></div>
+              <div><span class="text-slate-500">Jarak:</span> <strong class="text-emerald-950">${details.distance} m</strong></div>
+              <div><span class="text-slate-500">Waktu:</span> <strong class="text-emerald-950">${details.time.split(',')[1] || details.time}</strong></div>
+            </div>
+          ` : ''}
+          <button onclick="startScanner()" class="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition">
+            Scan Lagi
+          </button>
+        `;
+      } else {
+        container.className = 'bg-rose-50/80 rounded-2xl p-5 border border-rose-200 shadow-sm text-center transition-all';
+        container.innerHTML = `
+          <div class="w-14 h-14 bg-rose-500 text-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg shadow-rose-500/30">
+            <i data-lucide="x" class="w-8 h-8"></i>
+          </div>
+          <h3 class="text-base font-bold text-rose-900">${title}</h3>
+          <p class="text-xs text-rose-700 mt-1 leading-relaxed">${msg}</p>
+          <div class="mt-4 flex gap-2 justify-center">
+            <button onclick="refreshUserLocation(); startScanner();" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-sm transition">
+              Coba Lagi
+            </button>
+          </div>
+        `;
+      }
+      lucide.createIcons();
+    }
+
+    /* ========================================================
+       MODE ADMIN: PETA LEAFLET & GEOFENCE
+       ======================================================== */
+    function initMap() {
+      if (map) return; // Mencegah inisialisasi ulang ganda
+
+      map = L.map('map').setView([config.lat, config.lng], 16);
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      // Marker Titik Lokasi
+      officeMarker = L.marker([config.lat, config.lng], { draggable: true }).addTo(map);
+      officeMarker.bindPopup('<b>Titik Kantor Presensi</b><br>Geser marker ini untuk ubah lokasi').openPopup();
+
+      // Lingkaran Radius Geofence
+      officeCircle = L.circle([config.lat, config.lng], {
+        color: '#2563eb',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.25,
+        radius: config.radius
+      }).addTo(map);
+
+      // Event saat marker digeser manual di peta
+      officeMarker.on('dragend', function (e) {
+        const coord = e.target.getLatLng();
+        document.getElementById('targetLat').value = coord.lat.toFixed(6);
+        document.getElementById('targetLng').value = coord.lng.toFixed(6);
+        officeCircle.setLatLng(coord);
+      });
+    }
+
+    function saveLocationSettings() {
+      const lat = parseFloat(document.getElementById('targetLat').value);
+      const lng = parseFloat(document.getElementById('targetLng').value);
+      const rad = parseInt(document.getElementById('targetRadius').value);
+
+      if (isNaN(lat) || isNaN(lng) || isNaN(rad)) {
+        showModal('Input Salah', 'Mohon masukkan nilai Latitude, Longitude, dan Radius yang valid.');
+        return;
+      }
+
+      config.lat = lat;
+      config.lng = lng;
+      config.radius = rad;
+
+      // Simpan ke localStorage
+      localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+
+      // Perbarui peta
+      if (map && officeMarker && officeCircle) {
+        const latLng = [config.lat, config.lng];
+        officeMarker.setLatLng(latLng);
+        officeCircle.setLatLng(latLng);
+        officeCircle.setRadius(config.radius);
+        map.setView(latLng, 16);
+      }
+
+      document.getElementById('targetRadiusNote').textContent = `${config.radius} m`;
+      refreshUserLocation();
+      showModal('Berhasil Disimpan', 'Titik koordinat dan radius absensi berhasil diperbarui!');
+    }
+
+    function setTargetToCurrentLocation() {
+      refreshUserLocation((pos) => {
+        document.getElementById('targetLat').value = pos.lat.toFixed(6);
+        document.getElementById('targetLng').value = pos.lng.toFixed(6);
+        if (map && officeMarker && officeCircle) {
+          const latLng = [pos.lat, pos.lng];
+          officeMarker.setLatLng(latLng);
+          officeCircle.setLatLng(latLng);
+          map.setView(latLng, 16);
+        }
+      });
+    }
+
+    /* ========================================================
+       MODE ADMIN: QR CODE GENERATOR
+       ======================================================== */
+    function updateQrCode() {
+      const tokenInput = document.getElementById('qrTokenInput').value.trim();
+      if (!tokenInput) {
+        showModal('Token Kosong', 'Harap isi token rahasia absensi.');
+        return;
+      }
+      config.validToken = tokenInput;
+      localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+
+      renderQrImage(tokenInput);
+    }
+
+    function renderQrImage(token) {
+      const qrContainer = document.getElementById('qrcode');
+      qrContainer.innerHTML = '';
+      qrGeneratorInstance = new QRCode(qrContainer, {
+        text: token,
+        width: 160,
+        height: 160,
+        colorDark: "#0f172a",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.H
+      });
+      document.getElementById('currentQrTokenLabel').textContent = token;
+    }
+
+    function generateRandomToken() {
+      const randomStr = 'QR-' + Math.random().toString(36).substring(2, 8).toUpperCase() + '-' + new Date().getFullYear();
+      document.getElementById('qrTokenInput').value = randomStr;
+      updateQrCode();
+    }
+
+    /* ========================================================
+       RIWAYAT PRESENSI & EKSPOR DATA
+       ======================================================== */
+    function getAttendanceLogs() {
+      const data = localStorage.getItem(STORAGE_KEY_LOGS);
+      return data ? JSON.parse(data) : [];
+    }
+
+    function saveAttendanceLog(entry) {
+      const logs = getAttendanceLogs();
+      logs.unshift(entry); // Tambahkan ke paling atas
+      localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs));
+      renderHistoryTable();
+    }
+
+    function renderHistoryTable() {
+      const tbody = document.getElementById('attendanceTableBody');
+      const logs = getAttendanceLogs();
+
+      if (logs.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" class="py-8 text-center text-slate-400 font-medium text-xs">
+              Belum ada riwayat absensi yang tercatat.
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = logs.map(log => {
+        const isSuccess = log.status === 'VALID';
+        return `
+          <tr class="hover:bg-slate-50/70 transition">
+            <td class="py-3 px-4 font-mono text-slate-600">${log.time}</td>
+            <td class="py-3 px-4 font-semibold text-slate-800">${escapeHtml(log.name)}</td>
+            <td class="py-3 px-4">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${log.type === 'MASUK' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">
+                ${log.type}
+              </span>
+            </td>
+            <td class="py-3 px-4 font-mono">${log.distance} m</td>
+            <td class="py-3 px-4 font-mono text-slate-400 text-[11px]">${log.coords}</td>
+            <td class="py-3 px-4 text-center">
+              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${isSuccess ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}">
+                <span class="w-1.5 h-1.5 rounded-full ${isSuccess ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
+                ${isSuccess ? 'Dalam Radius' : 'Ditolak (' + log.reason + ')'}
+              </span>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function clearHistoryData() {
+      if (getAttendanceLogs().length === 0) return;
+      localStorage.removeItem(STORAGE_KEY_LOGS);
+      renderHistoryTable();
+      showModal('Data Dibersihkan', 'Semua log riwayat absensi berhasil dihapus.');
+    }
+
+    function exportToCSV() {
+      const logs = getAttendanceLogs();
+      if (logs.length === 0) {
+        showModal('Data Kosong', 'Tidak ada data riwayat absensi untuk diekspor.');
+        return;
+      }
+
+      let csvContent = "data:text/csv;charset=utf-8,";
+      csvContent += "ID,Waktu,Nama,Tipe,Jarak(Meter),Status,Alasan,Koordinat\n";
+
+      logs.forEach(row => {
+        csvContent += `"${row.id}","${row.time}","${row.name}","${row.type}","${row.distance}","${row.status}","${row.reason}","${row.coords}"\n`;
+      });
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `presensi_export_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    /* ========================================================
+       UI MODAL & NAVIGASI TAB
+       ======================================================== */
+    function switchMode(mode) {
+      const viewEmp = document.getElementById('viewEmployee');
+      const viewAdm = document.getElementById('viewAdmin');
+      const tabEmp = document.getElementById('tabEmployee');
+      const tabAdm = document.getElementById('tabAdmin');
+
+      if (mode === 'employee') {
+        viewEmp.classList.remove('hidden');
+        viewAdm.classList.add('hidden');
+        tabEmp.className = 'px-4 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 bg-white text-blue-600 shadow-sm';
+        tabAdm.className = 'px-4 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900';
+      } else {
+        viewEmp.classList.add('hidden');
+        viewAdm.classList.remove('hidden');
+        tabAdm.className = 'px-4 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 bg-white text-blue-600 shadow-sm';
+        tabEmp.className = 'px-4 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900';
+
+        // Hentikan scanner saat pindah tab
+        stopScanner();
+
+        // Inisialisasi peta dan trigger invalidateSize saat tab terlihat
+        setTimeout(() => {
+          initMap();
+          if (map) map.invalidateSize();
+        }, 150);
+      }
+    }
+
+    function showModal(title, message) {
+      document.getElementById('modalTitle').textContent = title;
+      document.getElementById('modalMessage').textContent = message;
+      const modal = document.getElementById('customModal');
+      const iconContainer = document.getElementById('modalIconContainer');
+      iconContainer.className = 'w-12 h-12 rounded-full mx-auto flex items-center justify-center bg-blue-100 text-blue-600';
+      iconContainer.innerHTML = '<i data-lucide="info" class="w-6 h-6"></i>';
+      lucide.createIcons();
+      modal.classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('customModal').classList.add('hidden');
+    }
+
+    function escapeHtml(string) {
+      return String(string).replace(/[&<>"']/g, function(s) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s];
+      });
+    }
+
+    /* ========================================================
+       WINDOW LOAD & INISIALISASI
+       ======================================================== */
+    window.onload = function () {
+      // Ambil konfigurasi tersimpan jika ada
+      const savedConfig = localStorage.getItem(STORAGE_KEY_CONFIG);
+      if (savedConfig) {
+        try {
+          config = { ...config, ...JSON.parse(savedConfig) };
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      // Isi input admin
+      document.getElementById('targetLat').value = config.lat;
+      document.getElementById('targetLng').value = config.lng;
+      document.getElementById('targetRadius').value = config.radius;
+      document.getElementById('qrTokenInput').value = config.validToken;
+      document.getElementById('targetRadiusNote').textContent = `${config.radius} m`;
+
+      // Render komponen awal
+      renderQrImage(config.validToken);
+      renderHistoryTable();
+      refreshUserLocation();
+      lucide.createIcons();
+    };
+  </script>
+</body>
+</html>
